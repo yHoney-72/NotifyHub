@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: notifyhub
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized

@@ -1,0 +1,89 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/notifyhub_test}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID:test-google-client-id}
+            client-secret: ${GOOGLE_CLIENT_SECRET:test-google-client-secret}
+            scope:
+              - openid
+              - profile
+              - email
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          google:
+            authorization-uri: https://accounts.google.com/o/oauth2/v2/auth
+            token-uri: https://oauth2.googleapis.com/token
+            user-info-uri: https://openidconnect.googleapis.com/v1/userinfo
+            user-name-attribute: sub
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:2}
+
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:2525}
+    username: ${MAIL_USERNAME:dummy}
+    password: ${MAIL_PASSWORD:dummy}
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:notifyhub-test-group}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.notifyhub.messaging.event
+        spring.json.value.default.type: com.notifyhub.messaging.event.NotificationEvent
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:test-secret-key-change-me-please-1234567890}
+    expiration: ${JWT_EXPIRATION:900}
+  refresh-token:
+    expiration: ${REFRESH_TOKEN_EXPIRATION:604800}
+
+cookie:
+  secure: false
+
+notifyhub:
+  sms:
+    provider: ${SMS_PROVIDER:TWILIO}
+  email:
+    provider: ${EMAIL_PROVIDER:SMTP}
+
+twilio:
+  account-sid: ${TWILIO_ACCOUNT_SID:test-account-sid}
+  auth-token: ${TWILIO_AUTH_TOKEN:test-auth-token}
+  phone-number: ${TWILIO_PHONE_NUMBER:+1234567890}
+
+springdoc:
+  swagger-ui:
+    enabled: true
