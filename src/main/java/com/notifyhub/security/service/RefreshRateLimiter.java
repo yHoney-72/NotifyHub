@@ -1,63 +1,33 @@
 package com.notifyhub.security.service;
 
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
 
 @Component
+@RequiredArgsConstructor
 public class RefreshRateLimiter {
 
+    private static final String KEY_PREFIX = "notifyhub:rate-limit:refresh:";
     private static final int MAX_REQUESTS = 5;
-    private static final long WINDOW_SECONDS = 60;
+    private static final Duration WINDOW = Duration.ofSeconds(60);
 
-    private final Map<String, RateLimitEntry> requests =
-            new ConcurrentHashMap<>();
+    private final StringRedisTemplate redisTemplate;
 
     public boolean allow(String key) {
+        String redisKey = KEY_PREFIX + key;
+        Long requestCount = redisTemplate.opsForValue().increment(redisKey);
 
-        long now = Instant.now().getEpochSecond();
-
-        RateLimitEntry entry =
-                requests.compute(
-                        key,
-                        (k, existing) -> {
-
-                            if (existing == null ||
-                                    now - existing.windowStart
-                                            >= WINDOW_SECONDS) {
-
-                                return new RateLimitEntry(
-                                        now,
-                                        1
-                                );
-                            }
-
-                            if (existing.count >= MAX_REQUESTS) {
-                                existing.count++;
-                                return existing;
-                            }
-
-                            existing.count++;
-                            return existing;
-                        }
-                );
-
-        return entry.count <= MAX_REQUESTS;
-    }
-
-    private static class RateLimitEntry {
-
-        private final long windowStart;
-        private int count;
-
-        private RateLimitEntry(
-                long windowStart,
-                int count) {
-
-            this.windowStart = windowStart;
-            this.count = count;
+        if (requestCount == null) {
+            throw new IllegalStateException("Redis did not return a rate-limit counter");
         }
+
+        if (requestCount == 1L) {
+            redisTemplate.expire(redisKey, WINDOW);
+        }
+
+        return requestCount <= MAX_REQUESTS;
     }
 }

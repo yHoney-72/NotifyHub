@@ -19,8 +19,11 @@ class RedisIdempotencyServiceTest {
 
         RedisIdempotencyService service = new RedisIdempotencyService(redisTemplate);
 
-        assertTrue(service.tryAcquire("test-key"));
-        verify(valueOperations).setIfAbsent(anyString(), eq("1"), any(Duration.class));
+        assertTrue(service.tryAcquire(10L, "orders-service", "test-key"));
+        verify(valueOperations).setIfAbsent(
+                eq("notifyhub:idempotency:10:orders-service:test-key"),
+                eq("1"),
+                any(Duration.class));
     }
 
     @Test
@@ -32,7 +35,35 @@ class RedisIdempotencyServiceTest {
 
         RedisIdempotencyService service = new RedisIdempotencyService(redisTemplate);
 
-        assertFalse(service.tryAcquire("duplicate-key"));
-        verify(valueOperations).setIfAbsent(anyString(), eq("1"), any(Duration.class));
+        assertFalse(service.tryAcquire(10L, "orders-service", "duplicate-key"));
+        verify(valueOperations).setIfAbsent(
+                eq("notifyhub:idempotency:10:orders-service:duplicate-key"),
+                eq("1"),
+                any(Duration.class));
+    }
+    @Test
+    void shouldPropagateExceptionWhenRedisIsUnavailable() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
+
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        when(valueOperations.setIfAbsent(
+                anyString(),
+                eq("1"),
+                any(Duration.class)
+        )).thenThrow(new RuntimeException("Redis unavailable"));
+
+        RedisIdempotencyService service =
+                new RedisIdempotencyService(redisTemplate);
+
+        assertThrows(
+                RuntimeException.class,
+                () -> service.tryAcquire(
+                        10L,
+                        "NotifyHub-Test",
+                        "redis-failure-test"
+                )
+        );
     }
 }

@@ -37,6 +37,10 @@ public class NotificationRequestDTO {
     @Schema(example = "order-123")
     private String idempotencyKey;
 
+    @NotBlank(message = "Source application is required")
+    @Schema(example = "orders-service")
+    private String sourceApplication;
+
     @AssertTrue(message = "Either raw content or templateCode must be provided")
     public boolean isContentOrTemplateProvided() {
         boolean hasRawContent = rawBody != null && !rawBody.isBlank();

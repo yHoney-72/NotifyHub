@@ -2,6 +2,7 @@ package com.notifyhub.engine;
 
 import com.notifyhub.enums.NotificationStatus;
 import com.notifyhub.messaging.event.NotificationEvent;
+import com.notifyhub.monitoring.NotifyHubMetrics;
 import com.notifyhub.notification.entity.Notification;
 import com.notifyhub.notification.repository.NotificationRepository;
 import com.notifyhub.notification.sender.DeliveryResult;
@@ -10,6 +11,7 @@ import com.notifyhub.notification.sender.NotificationSender;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import io.micrometer.core.instrument.Timer;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,8 +22,18 @@ import java.util.List;
 public class NotificationEngine {
     private final NotificationRepository notificationRepository;
     private final List<NotificationSender> notificationSenders;
+    private final NotifyHubMetrics metrics;
 
     public void process(NotificationEvent event) {
+        Timer.Sample sample = metrics.startNotificationProcessing();
+        try {
+            processNotification(event);
+        } finally {
+            metrics.recordNotificationProcessing(sample, event.channel());
+        }
+    }
+
+    private void processNotification(NotificationEvent event) {
         Notification notification = notificationRepository
                 .findById(event.notificationId())
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -58,6 +70,7 @@ public class NotificationEngine {
             notification.setSentAt(LocalDateTime.now());
             notification.setFailureReason(null);
             notificationRepository.save(notification);
+            metrics.notificationSent(event.channel());
 
             log.info(
                     "Notification delivered successfully: id={}, channel={}, attempt={}",

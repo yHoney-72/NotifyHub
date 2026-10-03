@@ -1,12 +1,17 @@
 package com.notifyhub.notification.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.notifyhub.enums.Channel;
 import com.notifyhub.enums.NotificationStatus;
+import com.notifyhub.enums.OutboxStatus;
 import com.notifyhub.exception.BadRequestException;
 import com.notifyhub.exception.DuplicateNotificationException;
 import com.notifyhub.exception.ResourceNotFoundException;
 import com.notifyhub.messaging.event.NotificationEvent;
-import com.notifyhub.messaging.producer.NotificationEventProducer;
+import com.notifyhub.messaging.outbox.OutboxEvent;
+import com.notifyhub.messaging.outbox.OutboxEventRepository;
+import com.notifyhub.monitoring.NotifyHubMetrics;
 import com.notifyhub.notification.dto.NotificationRequestDTO;
 import com.notifyhub.notification.dto.NotificationResponseDTO;
 import com.notifyhub.notification.entity.Notification;
@@ -28,8 +33,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,14 +40,17 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class NotificationServiceImpl implements NotificationService {
+
     private final NotificationRepository notificationRepository;
-    private final NotificationEventProducer notificationEventProducer;
     private final TemplateRepository templateRepository;
     private final NotificationMapper notificationMapper;
     private final TemplateRenderer templateRenderer;
     private final IdempotencyService idempotencyService;
     private final UserRepository userRepository;
     private final List<NotificationSender> notificationSenders;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
+    private final NotifyHubMetrics metrics;
 
     @Override
     @Transactional
@@ -52,32 +58,34 @@ public class NotificationServiceImpl implements NotificationService {
         String idempotencyKey = request.getIdempotencyKey();
         AppUser currentUser = getCurrentUser();
 
-        if (!idempotencyService.tryAcquire(idempotencyKey)) {
+        if (!idempotencyService.tryAcquire(
+                currentUser.getId(),
+                request.getSourceApplication(),
+                idempotencyKey)) {
             throw new DuplicateNotificationException(
-                    "Notification already exists with idempotency key: " + idempotencyKey
-            );
+                    "Notification already exists with idempotency key: " + idempotencyKey);
         }
 
         try {
-            if (notificationRepository.existsByIdempotencyKeyAndUser(idempotencyKey, currentUser)) {
+            if (notificationRepository
+                    .existsByIdempotencyKeyAndUserAndSourceApplication(
+                            idempotencyKey,
+                            currentUser,
+                            request.getSourceApplication())) {
                 throw new DuplicateNotificationException(
-                        "Notification already exists with idempotency key: " + idempotencyKey
-                );
+                        "Notification already exists with idempotency key: " + idempotencyKey);
             }
         } catch (DuplicateNotificationException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new DuplicateNotificationException(
-                    "Notification already exists with idempotency key: " + idempotencyKey,
-                    ex
-            );
+                    "Notification already exists with idempotency key: " + idempotencyKey, ex);
         }
 
         if (notificationSenders.stream()
                 .noneMatch(sender -> sender.getChannel() == request.getChannel())) {
             throw new BadRequestException(
-                    "Unsupported notification channel: " + request.getChannel()
-            );
+                    "Unsupported notification channel: " + request.getChannel());
         }
 
         String finalContent;
@@ -97,24 +105,25 @@ public class NotificationServiceImpl implements NotificationService {
             finalContent = request.getRawBody();
             subject = request.getRawSubject();
         } else {
-            NotificationTemplate template = templateRepository.findByCodeAndActiveTrue(request.getTemplateCode())
+            NotificationTemplate template = templateRepository
+                    .findByCodeAndActiveTrue(request.getTemplateCode())
                     .orElseThrow(() -> new ResourceNotFoundException(
-                            "Template not found: " + request.getTemplateCode()
-                    ));
+                            "Template not found: " + request.getTemplateCode()));
 
             subject = template.getSubject();
             finalContent = templateRenderer.render(
                     template.getBody(),
-                    request.getData()
-            );
+                    request.getData());
         }
 
         Notification notification = notificationMapper.toEntity(request);
         notification.setUser(currentUser);
+        notification.setSourceApplication(request.getSourceApplication());
         notification.setRenderedContent(finalContent);
         notification.setStatus(NotificationStatus.PENDING);
 
         Notification savedNotification = notificationRepository.save(notification);
+        metrics.notificationCreated(request.getChannel());
 
         NotificationEvent event = new NotificationEvent(
                 savedNotification.getId(),
@@ -126,28 +135,34 @@ public class NotificationServiceImpl implements NotificationService {
                 finalContent
         );
 
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(
-                    new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            notificationEventProducer.publish(event);
-                        }
-                    }
-            );
-        } else {
-            notificationEventProducer.publish(event);
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException ex) {
+            throw new RuntimeException("Failed to serialize notification event", ex);
         }
+
+        OutboxEvent outboxEvent = new OutboxEvent();
+        outboxEvent.setAggregateType("Notification");
+        outboxEvent.setAggregateId(savedNotification.getId());
+        outboxEvent.setEventType("NotificationCreated");
+        outboxEvent.setPayload(payload);
+        outboxEvent.setStatus(OutboxStatus.PENDING);
+        outboxEvent.setAttempts(0);
+
+        outboxEventRepository.save(outboxEvent);
+
         return notificationMapper.toResponse(savedNotification);
     }
 
     @Override
     public NotificationResponseDTO getNotification(Long id) {
         AppUser currentUser = getCurrentUser();
+
         Notification notification = notificationRepository.findByIdAndUser(id, currentUser)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Notification not found: " + id
-                ));
+                        "Notification not found: " + id));
+
         return notificationMapper.toResponse(notification);
     }
 
@@ -159,6 +174,7 @@ public class NotificationServiceImpl implements NotificationService {
             LocalDateTime fromDate,
             LocalDateTime toDate,
             Pageable pageable) {
+
         if (pageable.getPageSize() > 100) {
             throw new BadRequestException("Page size cannot exceed 100");
         }
@@ -178,11 +194,17 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     private AppUser getCurrentUser() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated() || authentication.getName() == null) {
+        Authentication authentication =
+                SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication == null ||
+                !authentication.isAuthenticated() ||
+                authentication.getName() == null) {
             throw new BadRequestException("Authenticated user is required");
         }
+
         return userRepository.findByUsername(authentication.getName())
-                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + authentication.getName()));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "User not found: " + authentication.getName()));
     }
 }

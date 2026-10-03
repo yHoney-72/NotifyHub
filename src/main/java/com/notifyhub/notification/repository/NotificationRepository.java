@@ -11,11 +11,12 @@ public interface NotificationRepository
         extends JpaRepository<Notification, Long>,
         JpaSpecificationExecutor<Notification> {
 
-    Optional<Notification> findByIdempotencyKey(String idempotencyKey);
+    Optional<Notification> findByIdempotencyKeyAndUserAndSourceApplication(
+            String idempotencyKey, AppUser user, String sourceApplication);
 
     Optional<Notification> findByIdAndUser(Long id, AppUser user);
 
-    boolean existsByIdempotencyKey(String idempotencyKey);
+    boolean existsByIdempotencyKeyAndUserAndSourceApplication(
+            String idempotencyKey, AppUser user, String sourceApplication);
 
-    boolean existsByIdempotencyKeyAndUser(String idempotencyKey, AppUser user);
 }

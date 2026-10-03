@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -53,6 +54,7 @@ class NotificationRepositoryIntegrationTest extends TestcontainersSupport {
         Notification notification = new Notification();
         notification.setUser(currentUser);
         notification.setIdempotencyKey("integration-test-" + System.currentTimeMillis());
+        notification.setSourceApplication("repository-tests");
         notification.setChannel(Channel.EMAIL);
         notification.setRecipient("test@gmail.com");
         notification.setStatus(NotificationStatus.PENDING);
@@ -74,23 +76,28 @@ class NotificationRepositoryIntegrationTest extends TestcontainersSupport {
     }
 
     @Test
-    void shouldFindByIdempotencyKey() {
+    void shouldFindByIdempotencyKeyInScope() {
         String key = "integration-idempotency-" + System.currentTimeMillis();
 
         Notification notification = new Notification();
         notification.setUser(currentUser);
         notification.setIdempotencyKey(key);
+        notification.setSourceApplication("repository-tests");
         notification.setChannel(Channel.SMS);
         notification.setRecipient("+919198974465");
         notification.setStatus(NotificationStatus.PENDING);
 
         Notification saved = notificationRepository.save(notification);
 
-        Notification found = notificationRepository.findByIdempotencyKey(key)
+        Notification found = notificationRepository
+                .findByIdempotencyKeyAndUserAndSourceApplication(
+                        key, currentUser, "repository-tests")
                 .orElseThrow();
 
         assertEquals(saved.getId(), found.getId());
-        assertTrue(notificationRepository.existsByIdempotencyKey(key));
+        assertTrue(notificationRepository
+                .existsByIdempotencyKeyAndUserAndSourceApplication(
+                        key, currentUser, "repository-tests"));
 
         notificationRepository.delete(found);
     }
@@ -100,6 +107,7 @@ class NotificationRepositoryIntegrationTest extends TestcontainersSupport {
         Notification notification = new Notification();
         notification.setUser(currentUser);
         notification.setIdempotencyKey("lock-test-" + System.nanoTime());
+        notification.setSourceApplication("repository-tests");
         notification.setChannel(Channel.EMAIL);
         notification.setRecipient("lock@gmail.com");
         notification.setStatus(NotificationStatus.PENDING);
@@ -121,5 +129,75 @@ class NotificationRepositoryIntegrationTest extends TestcontainersSupport {
         );
 
         notificationRepository.deleteById(saved.getId());
+    }
+
+    @Test
+    void shouldAllowSameUserAndKeyAcrossApplications() {
+        String key = "scoped-user-app-" + System.nanoTime();
+
+        Notification first = notification(key, currentUser, "app-one");
+        Notification second = notification(key, currentUser, "app-two");
+
+        notificationRepository.save(first);
+        notificationRepository.save(second);
+
+        assertTrue(notificationRepository
+                .existsByIdempotencyKeyAndUserAndSourceApplication(
+                        key, currentUser, "app-one"));
+        assertTrue(notificationRepository
+                .existsByIdempotencyKeyAndUserAndSourceApplication(
+                        key, currentUser, "app-two"));
+
+        notificationRepository.deleteAll(java.util.List.of(first, second));
+    }
+
+    @Test
+    void shouldRejectSameUserApplicationAndKey() {
+        String key = "scoped-duplicate-" + System.nanoTime();
+        Notification first = notification(key, currentUser, "same-app");
+        Notification duplicate = notification(key, currentUser, "same-app");
+
+        notificationRepository.saveAndFlush(first);
+
+        assertThrows(
+                DataIntegrityViolationException.class,
+                () -> notificationRepository.saveAndFlush(duplicate)
+        );
+
+        notificationRepository.deleteById(first.getId());
+    }
+
+    @Test
+    void shouldAllowSameApplicationAndKeyAcrossUsers() {
+        String key = "scoped-users-" + System.nanoTime();
+        AppUser secondUser = userRepository.save(
+                new AppUser("notifyhub-" + System.nanoTime(), "encoded-pass", "USER"));
+
+        Notification first = notification(key, currentUser, "shared-app");
+        Notification second = notification(key, secondUser, "shared-app");
+
+        notificationRepository.save(first);
+        notificationRepository.save(second);
+
+        assertTrue(notificationRepository
+                .existsByIdempotencyKeyAndUserAndSourceApplication(
+                        key, currentUser, "shared-app"));
+        assertTrue(notificationRepository
+                .existsByIdempotencyKeyAndUserAndSourceApplication(
+                        key, secondUser, "shared-app"));
+
+        notificationRepository.deleteAll(java.util.List.of(first, second));
+        userRepository.delete(secondUser);
+    }
+
+    private Notification notification(String key, AppUser user, String sourceApplication) {
+        Notification notification = new Notification();
+        notification.setUser(user);
+        notification.setIdempotencyKey(key);
+        notification.setSourceApplication(sourceApplication);
+        notification.setChannel(Channel.EMAIL);
+        notification.setRecipient("scope-test@example.com");
+        notification.setStatus(NotificationStatus.PENDING);
+        return notification;
     }
 }

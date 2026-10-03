@@ -11,7 +11,13 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "notifications")
+@Table(
+        name = "notifications",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_notifications_idempotency",
+                columnNames = {"user_id", "source_application", "idempotency_key"}
+        )
+)
 @Getter
 @Setter
 public class Notification {
@@ -24,7 +30,7 @@ public class Notification {
     @JoinColumn(name = "user_id", nullable = false)
     private AppUser user;
 
-    @Column(nullable = false, unique = true, length = 100)
+    @Column(nullable = false, length = 100)
     private String idempotencyKey;
 
     @Enumerated(EnumType.STRING)
@@ -70,7 +76,7 @@ public class Notification {
     @Column(length = 500)
     private String failureReason;
 
-    @Column(length = 100)
+    @Column(nullable = false, length = 100)
     private String sourceApplication;
 
     @CreationTimestamp

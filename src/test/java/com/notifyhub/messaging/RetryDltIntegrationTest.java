@@ -72,6 +72,7 @@ class RetryDltIntegrationTest extends TestcontainersSupport {
         Notification notification=new Notification();
         notification.setUser(currentUser);
         notification.setIdempotencyKey("dlt-test-"+System.nanoTime());
+        notification.setSourceApplication("retry-tests");
         notification.setChannel(Channel.EMAIL);
         notification.setRecipient("dlt-test@gmail.com");
         notification.setRenderedContent("DLT integration test");

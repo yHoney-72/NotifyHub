@@ -3,6 +3,7 @@ package com.notifyhub.engine;
 import com.notifyhub.enums.Channel;
 import com.notifyhub.enums.NotificationStatus;
 import com.notifyhub.messaging.event.NotificationEvent;
+import com.notifyhub.monitoring.NotifyHubMetrics;
 import com.notifyhub.notification.entity.Notification;
 import com.notifyhub.notification.repository.NotificationRepository;
 import com.notifyhub.notification.sender.DeliveryResult;
@@ -33,6 +34,9 @@ class NotificationEngineTest {
     @Mock
     private NotificationSender notificationSender;
 
+    @Mock
+    private NotifyHubMetrics metrics;
+
     @InjectMocks
     private NotificationEngine notificationEngine;
 
@@ -45,6 +49,7 @@ class NotificationEngineTest {
         notification = new Notification();
 
         notification.setIdempotencyKey("engine-test-123");
+        notification.setSourceApplication("engine-tests");
         notification.setChannel(Channel.EMAIL);
         notification.setRecipient("test@gmail.com");
         notification.setRenderedContent("Hello");
@@ -83,7 +88,8 @@ class NotificationEngineTest {
         NotificationEngine engine =
                 new NotificationEngine(
                         notificationRepository,
-                        List.of(notificationSender)
+                        List.of(notificationSender),
+                        metrics
                 );
 
         engine.process(event);
@@ -118,7 +124,8 @@ class NotificationEngineTest {
         NotificationEngine engine =
                 new NotificationEngine(
                         notificationRepository,
-                        List.of(notificationSender)
+                        List.of(notificationSender),
+                        metrics
                 );
 
         assertThrows(
@@ -154,7 +161,8 @@ class NotificationEngineTest {
         NotificationEngine engine =
                 new NotificationEngine(
                         notificationRepository,
-                        List.of(notificationSender)
+                        List.of(notificationSender),
+                        metrics
                 );
 
         assertThrows(
@@ -178,7 +186,8 @@ class NotificationEngineTest {
         NotificationEngine engine =
                 new NotificationEngine(
                         notificationRepository,
-                        List.of(notificationSender)
+                        List.of(notificationSender),
+                        metrics
                 );
 
         assertThrows(

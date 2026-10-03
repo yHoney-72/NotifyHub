@@ -1,14 +1,17 @@
-package com.notifyhub.notification.service;
+package com.notifyhub.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.notifyhub.enums.Channel;
-import com.notifyhub.messaging.event.NotificationEvent;
-import com.notifyhub.messaging.producer.NotificationEventProducer;
+import com.notifyhub.messaging.outbox.OutboxEvent;
+import com.notifyhub.messaging.outbox.OutboxEventRepository;
+import com.notifyhub.monitoring.NotifyHubMetrics;
 import com.notifyhub.notification.dto.NotificationRequestDTO;
 import com.notifyhub.notification.entity.Notification;
 import com.notifyhub.notification.idempotency.IdempotencyService;
 import com.notifyhub.notification.mapper.NotificationMapper;
 import com.notifyhub.notification.repository.NotificationRepository;
 import com.notifyhub.notification.sender.NotificationSender;
+import com.notifyhub.notification.service.NotificationServiceImpl;
 import com.notifyhub.security.entity.AppUser;
 import com.notifyhub.security.repository.UserRepository;
 import com.notifyhub.template.renderer.TemplateRenderer;
@@ -22,10 +25,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.transaction.support.SimpleTransactionStatus;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Optional;
@@ -35,15 +34,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-class NotificationServiceAfterCommitTest {
+class NotificationServiceOutboxTest {
     @Mock private NotificationRepository notificationRepository;
-    @Mock private NotificationEventProducer notificationEventProducer;
     @Mock private TemplateRepository templateRepository;
     @Mock private NotificationMapper notificationMapper;
     @Mock private TemplateRenderer templateRenderer;
     @Mock private IdempotencyService idempotencyService;
     @Mock private UserRepository userRepository;
     @Mock private NotificationSender notificationSender;
+    @Mock private OutboxEventRepository outboxEventRepository;
+    @Mock private NotifyHubMetrics metrics;
 
     private NotificationServiceImpl notificationService;
 
@@ -51,18 +51,26 @@ class NotificationServiceAfterCommitTest {
     void setUp() {
         AppUser currentUser = new AppUser("notifyhub", "encoded-pass", "USER");
         currentUser.setId(10L);
-        when(userRepository.findByUsername("notifyhub")).thenReturn(Optional.of(currentUser));
-        when(notificationSender.getChannel()).thenReturn(Channel.EMAIL);
+
+        when(userRepository.findByUsername("notifyhub"))
+                .thenReturn(Optional.of(currentUser));
+
+        when(notificationSender.getChannel())
+                .thenReturn(Channel.EMAIL);
+
         notificationService = new NotificationServiceImpl(
                 notificationRepository,
-                notificationEventProducer,
                 templateRepository,
                 notificationMapper,
                 templateRenderer,
                 idempotencyService,
                 userRepository,
-                List.of(notificationSender)
+                List.of(notificationSender),
+                outboxEventRepository,
+                new ObjectMapper(),
+                metrics
         );
+
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         "notifyhub",
@@ -73,35 +81,52 @@ class NotificationServiceAfterCommitTest {
     }
 
     @Test
-    void shouldRegisterPublishOnlyAfterCommit() {
+    void shouldSaveOutboxEventWithNotification() {
         NotificationRequestDTO request = new NotificationRequestDTO();
         request.setChannel(Channel.EMAIL);
         request.setRecipient("test@example.com");
         request.setRawSubject("Subject");
         request.setRawBody("Body");
-        request.setIdempotencyKey("after-commit-1");
+        request.setIdempotencyKey("outbox-test-1");
+        request.setSourceApplication("orders-service");
 
         Notification notification = new Notification();
         Notification saved = new Notification();
         saved.setId(1L);
 
-        when(idempotencyService.tryAcquire("after-commit-1")).thenReturn(true);
-        when(notificationRepository.existsByIdempotencyKeyAndUser(eq("after-commit-1"), any())).thenReturn(false);
-        when(notificationMapper.toEntity(request)).thenReturn(notification);
-        when(notificationRepository.save(notification)).thenReturn(saved);
-        when(notificationMapper.toResponse(saved)).thenReturn(new com.notifyhub.notification.dto.NotificationResponseDTO());
+        when(idempotencyService.tryAcquire(10L, "orders-service", "outbox-test-1"))
+                .thenReturn(true);
 
-        TransactionSynchronizationManager.initSynchronization();
-        try {
-            notificationService.sendNotification(request);
-            assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
-            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
-        } finally {
-            TransactionSynchronizationManager.clearSynchronization();
-        }
+        when(notificationRepository.existsByIdempotencyKeyAndUserAndSourceApplication(
+                eq("outbox-test-1"), any(), eq("orders-service")))
+                .thenReturn(false);
 
-        ArgumentCaptor<NotificationEvent> captor = ArgumentCaptor.forClass(NotificationEvent.class);
-        verify(notificationEventProducer).publish(captor.capture());
-        assertEquals(1L, captor.getValue().notificationId());
+        when(notificationMapper.toEntity(request))
+                .thenReturn(notification);
+
+        when(notificationRepository.save(notification))
+                .thenReturn(saved);
+
+        when(notificationMapper.toResponse(saved))
+                .thenReturn(new com.notifyhub.notification.dto.NotificationResponseDTO());
+
+        notificationService.sendNotification(request);
+
+        ArgumentCaptor<OutboxEvent> captor =
+                ArgumentCaptor.forClass(OutboxEvent.class);
+
+        verify(outboxEventRepository).save(captor.capture());
+
+        OutboxEvent outboxEvent = captor.getValue();
+
+        assertEquals("Notification", outboxEvent.getAggregateType());
+        assertEquals(1L, outboxEvent.getAggregateId());
+        assertEquals("NotificationCreated", outboxEvent.getEventType());
+        assertEquals(
+                com.notifyhub.enums.OutboxStatus.PENDING,
+                outboxEvent.getStatus()
+        );
+
+        verify(outboxEventRepository).save(any(OutboxEvent.class));
     }
 }
