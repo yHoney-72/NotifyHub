@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -23,6 +24,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Component
+@ConditionalOnProperty(
+        name = "notifyhub.oauth2.google.enabled",
+        havingValue = "true"
+)
 @RequiredArgsConstructor
 public class GoogleOAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
     private final UserRepository userRepository;

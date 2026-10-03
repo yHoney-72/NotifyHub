@@ -2,6 +2,8 @@ package com.notifyhub.security.config;
 
 import com.notifyhub.security.OAuth.GoogleOAuth2SuccessHandler;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -16,10 +18,15 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
-    private final GoogleOAuth2SuccessHandler googleOAuth2SuccessHandler;
+
+    private final ObjectProvider<GoogleOAuth2SuccessHandler> googleOAuth2SuccessHandler;
+
+    @Value("${notifyhub.oauth2.google.enabled:false}")
+    private boolean googleOAuthEnabled;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
         http
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
@@ -46,15 +53,19 @@ public class SecurityConfig {
                                 }
                         )
                 )
-                .oauth2Login(oauth2 -> oauth2
-                        .loginPage("/oauth2/authorization/google")
-                        .successHandler(googleOAuth2SuccessHandler)
-                )
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter())
                         )
                 );
+
+        if (googleOAuthEnabled) {
+            http.oauth2Login(oauth2 -> oauth2
+                    .loginPage("/oauth2/authorization/google")
+                    .successHandler(googleOAuth2SuccessHandler.getObject())
+            );
+        }
+
         return http.build();
     }
 
@@ -68,10 +79,15 @@ public class SecurityConfig {
     public JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtGrantedAuthoritiesConverter authoritiesConverter =
                 new JwtGrantedAuthoritiesConverter();
+
         authoritiesConverter.setAuthoritiesClaimName("roles");
         authoritiesConverter.setAuthorityPrefix("");
-        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+
+        JwtAuthenticationConverter converter =
+                new JwtAuthenticationConverter();
+
         converter.setJwtGrantedAuthoritiesConverter(authoritiesConverter);
+
         return converter;
     }
 }

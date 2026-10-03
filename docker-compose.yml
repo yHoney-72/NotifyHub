@@ -86,13 +86,16 @@ services:
     env_file:
       - .env
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/notifyhub_db
+      DB_URL: jdbc:postgresql://postgres:5432/notifyhub_db
       DB_USERNAME: postgres
       DB_PASSWORD: ${DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CONSUMER_GROUP_ID: notifyhub-consumer-group
+      SPRING_PROFILES_ACTIVE: prod
       COOKIE_SECURE: "false"
+      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
     ports:
       - "8081:8080"
     depends_on:
